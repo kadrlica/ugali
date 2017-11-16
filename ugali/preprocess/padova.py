@@ -21,6 +21,13 @@ from ugali.utils.logger import logger
 from ugali.utils.shell import mkdir
 from ugali.analysis.isochrone import PadovaIsochrone,OldPadovaIsochrone
 
+# survey system
+photsys_dict = odict([
+        ('des' ,'tab_mag_odfnew/tab_mag_decam.dat'),
+        ('sdss','tab_mag_odfnew/tab_mag_sloan.dat'),
+        ('ps1' ,'tab_mag_odfnew/tab_mag_panstarrs1.dat'),
+])
+
 # Commented options may need to be restored for older version/isochrones.
 # The parameters were tracked down by:
 # Chrome -> View -> Developer -> Developer Tools
@@ -65,7 +72,7 @@ defaults_cmd=  {#'binary_frac': 0.3,
                 'output_evstage': 1,
                 'output_gzip': 0,
                 'output_kind': 0,
-                'photsys_file': 'tab_mag_odfnew/tab_mag_decam.dat',
+                'photsys_file': photsys_dict['des'],
                 #'photsys_version': 'yang',
                 'submit_form': 'Submit'}
 
@@ -74,31 +81,30 @@ defaults_28 = dict(defaults_cmd,cmd_version='2.8')
 defaults_29 = dict(defaults_cmd,cmd_version='2.9')
 defaults_30 = dict(defaults_cmd,cmd_version='3.0')
 
-# survey system
-photosys_dict = odict([
-        ('des',dict(photosys_file='tab_mag_odfnew/tab_mag_decam.dat')),
-        ('sdss',dict(photosys_file='tab_mag_odfnew/tab_mag_sloan.dat')),
-        ('ps1',dict(photosys_file='tab_mag_odfnew/tab_mag_panstarrs1.dat')),
-])
 
 class Download(object):
     def __init__(self,survey='des',**kwargs):
         self.survey=survey.lower()
 
-    
     def create_grid(self,abins,zbins):
         arange = np.linspace(abins[0],abins[1],abins[2]+1)
         zrange = np.logspace(np.log10(zbins[0]),np.log10(zbins[1]),zbins[2]+1)
         aa,zz = np.meshgrid(arange,zrange)
         return aa.flatten(),zz.flatten()
 
-    def run(self,grid,outdir=None,force=False):
-        aa,zz = grid
-        for a,z in zip(aa,zz):
-            try: 
-                self.download(a,z,outdir,force)
-            except RuntimeError, msg:
-                logger.warning(msg)
+    #def run(self,grid,outdir=None,force=False):
+    #    aa,zz = grid
+    #    for a,z in zip(aa,zz):
+    #        try: 
+    #            self.download(a,z,outdir,force)
+    #        except RuntimeError, msg:
+    #            logger.warning(msg)
+
+    def print_info(self,**kwargs):
+        kwargs['name'] = self.__class__.__name__
+        kwargs['survey'] = self.survey
+        logger.info('Downloading: %(name)s (survey=%(survey)s, age=%(age).1fGyr, Z=%(z).5f, Fe/H=%(feh).3f)'%kwargs)
+        pass
 
 class Padova(Download):
     defaults = copy.deepcopy(defaults_27)
@@ -127,16 +133,16 @@ class Padova(Download):
             raise RuntimeError(msg)
 
         if outdir is None: outdir = './'
-        mkdir(outdir)
-
         basename = self.params2filename(age,metallicity)
         outfile = os.path.join(outdir,basename)
             
         if os.path.exists(outfile) and not force:
             logger.warning("Found %s; skipping..."%(outfile))
             return
+        mkdir(outdir)
 
-        logger.info("Downloading isochrone: %s (age=%.1fGyr, metallicity=%.5f)"%(self.__class__.__name__,age,metallicity))
+        feh = PadovaIsochrone.z2feh(metallicity)
+        self.print_info(age=age,z=metallicity,feh=feh)
 
         d = dict(self.defaults)
         d['photsys_file'] = photsys_dict[self.survey]
@@ -159,7 +165,7 @@ class Padova(Download):
             stdout = subprocess.check_output(cmd,shell=True,stderr=subprocess.STDOUT)
             logger.debug(stdout)
         else:
-            raise RuntimeError('Server response is incorrect')
+            raise RuntimeError('Bad server response')
 
 class OldPadova(Padova):
     defaults = dict(defaults_27)
@@ -212,7 +218,7 @@ if __name__ == "__main__":
 
     if args.outdir is None: 
         args.outdir = os.path.join(args.survey.lower(),args.kind.lower())
-    logger.info("Creating output directory: %s"%args.outdir)
+    logger.info("Writing to output directory: %s"%args.outdir)
 
     p = factory(args.kind,survey=args.survey)
 
@@ -227,7 +233,7 @@ if __name__ == "__main__":
     def run(args):
         try:  
             p.download(*args)
-        except RuntimeError as e: 
+        except Exception as e: 
             logger.warn(str(e))
 
     arguments = [(a,z,args.outdir,args.force) for a,z in zip(*grid)]
