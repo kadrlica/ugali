@@ -45,7 +45,6 @@ def test_exists():
     assert os.path.exists(isodir)
     assert len(os.listdir(isodir))
 
-
 def test_abbr(name='Padova'):
     """ Test that parameters can be set by abbreviation. """
     iso = isochrone.factory(name,**abbr_kwargs)
@@ -86,7 +85,7 @@ def test_surveys():
     for s in survey:
         for name in ['Dotter2016']:
             iso = isochrone.factory(name,survey=s)
-
+            
 def test_import():
     """ Test various import strategies """
     import ugali.analysis.isochrone
@@ -120,7 +119,7 @@ def test_simulate():
     iso = isochrone.Bressan2012(**default_kwargs)
     stellar_mass = 5.0e3
     iso.simulate(stellar_mass)
-    
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description=__doc__)

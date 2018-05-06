@@ -38,6 +38,13 @@ photname_dict = odict([
         ('ps1' ,'Pan-STARRS1'),
 ])
 
+# survey system
+photsys_dict = odict([
+        ('des' ,'tab_mag_odfnew/tab_mag_decam.dat'),
+        ('sdss','tab_mag_odfnew/tab_mag_sloan.dat'),
+        ('ps1' ,'tab_mag_odfnew/tab_mag_panstarrs1.dat'),
+])
+
 # Commented options may need to be restored for older version/isochrones.
 # The parameters were tracked down by:
 # Chrome -> View -> Developer -> Developer Tools

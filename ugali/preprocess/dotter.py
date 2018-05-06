@@ -145,8 +145,7 @@ class Dotter2008(Download):
 
     def query_server(self, outfile, age, metallicity):
         z = metallicity
-        feh = self.isochrone.z2feh(z)
-        
+        feh = self.isochrone.z2feh(z)    
         params = dict(self.defaults)
         params['age']=age
         params['feh']='%.6f'%feh
@@ -158,6 +157,7 @@ class Dotter2008(Download):
         response = urlopen(query)
         page_source = response.read()
         try:
+
             file_id = int(page_source.split('tmp/tmp')[-1].split('.iso')[0])
         except Exception as e:
             logger.debug(str(e))
@@ -174,7 +174,7 @@ class Dotter2008(Download):
         #lines = [tmp.readline() for i in range(4)]
         #z_eff = float(lines[3].split()[4])
         #basename = self.params2filename(age,z_eff)
-     
+
         #logger.info("Writing %s..."%outfile)
         #mkdir(outdir)
         #shutil.move(tmpfile,outfile)
@@ -222,7 +222,18 @@ class Dotter2016(Download):
 
     def query_server(self, outfile, age, metallicity):
         z = metallicity
-        feh = self.isochrone.z2feh(z)
+
+        if outdir is None: outdir = './'
+        basename = self.params2filename(age,z)
+        outfile = os.path.join(outdir,basename)
+
+        if os.path.exists(outfile) and not force:
+            logger.warning("Found %s; skipping..."%(outfile))
+            return
+        mkdir(outdir)
+
+        feh = iso.Dotter2016.z2feh(z)
+        self.print_info(age=age,z=z,feh=feh)
         
         params = dict(self.defaults)
         params['output'] = dict_output[self.survey]
