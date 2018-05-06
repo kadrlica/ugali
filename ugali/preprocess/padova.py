@@ -8,8 +8,12 @@ https://github.com/mfouesneau/ezpadova
 
 """
 import os
-from urllib import urlencode
-from urllib2 import urlopen
+try:
+    from urllib.parse import urlencode
+    from urllib.request import urlopen
+except ImportError:
+    from urllib import urlencode
+    from urllib2 import urlopen
 import re
 import subprocess
 from multiprocessing import Pool
@@ -19,7 +23,20 @@ import copy
 import numpy as np
 from ugali.utils.logger import logger
 from ugali.utils.shell import mkdir
-from ugali.analysis.isochrone import PadovaIsochrone,OldPadovaIsochrone
+from ugali.analysis.isochrone import PadovaIsochrone
+
+# survey system
+photsys_dict = odict([
+        ('des' ,'tab_mag_odfnew/tab_mag_decam.dat'),
+        ('sdss','tab_mag_odfnew/tab_mag_sloan.dat'),
+        ('ps1' ,'tab_mag_odfnew/tab_mag_panstarrs1.dat'),
+])
+
+photname_dict = odict([
+        ('des' ,'DECAM'),
+        ('sdss','SDSS'),
+        ('ps1' ,'Pan-STARRS1'),
+])
 
 # survey system
 photsys_dict = odict([
@@ -83,6 +100,9 @@ defaults_30 = dict(defaults_cmd,cmd_version='3.0')
 
 
 class Download(object):
+
+    isochrone = None
+    
     def __init__(self,survey='des',**kwargs):
         self.survey=survey.lower()
 
@@ -92,34 +112,76 @@ class Download(object):
         aa,zz = np.meshgrid(arange,zrange)
         return aa.flatten(),zz.flatten()
 
-    #def run(self,grid,outdir=None,force=False):
-    #    aa,zz = grid
-    #    for a,z in zip(aa,zz):
-    #        try: 
-    #            self.download(a,z,outdir,force)
-    #        except RuntimeError, msg:
-    #            logger.warning(msg)
+    def print_info(self,age,metallicity):
+        params = dict(age=age,z=metallicity)
+        params['name'] = self.__class__.__name__
+        params['survey'] = self.survey
+        params['feh'] = self.isochrone.z2feh(metallicity)
+        msg = 'Downloading: %(name)s (survey=%(survey)s, age=%(age).1fGyr, Z=%(z).5f, Fe/H=%(feh).3f)'%params
+        logger.info(msg)
+        return msg
 
-    def print_info(self,**kwargs):
-        kwargs['name'] = self.__class__.__name__
-        kwargs['survey'] = self.survey
-        logger.info('Downloading: %(name)s (survey=%(survey)s, age=%(age).1fGyr, Z=%(z).5f, Fe/H=%(feh).3f)'%kwargs)
-        pass
+    def query_server(self,outfile,age,metallicity):
+        msg = "'query_server' not implemented by base class."
+        logger.error(msg)
+        raise RuntimeError(msg)
 
-class Padova(Download):
-    defaults = copy.deepcopy(defaults_27)
-
-    params2filename = PadovaIsochrone.params2filename
-    filename2params = PadovaIsochrone.filename2params
-    
-    abins = np.arange(1.0, 13.5 + 0.1, 0.1)
-    zbins = np.arange(1e-4,1e-3 + 1e-5,1e-5)
+    @classmethod
+    def verify(cls,filename,survey,age,metallicity):
+        msg = "'verify' not implemented by base class."
+        logger.error(msg)
+        raise RuntimeError(msg)
 
     def download(self,age,metallicity,outdir=None,force=False):
         """
         Check valid parameter range and download isochrones from:
         http://stev.oapd.inaf.it/cgi-bin/cmd
         """
+        if outdir is None: outdir = './'
+        basename = self.isochrone.params2filename(age,metallicity)
+        outfile = os.path.join(outdir,basename)
+            
+        if os.path.exists(outfile) and not force:
+            try:
+                self.verify(outfile,self.survey,age,metallicity)
+                logger.info("Found %s; skipping..."%(outfile))
+                return
+            except Exception as e:
+                msg = "Overwriting corrupted %s..."%(outfile)
+                logger.warn(msg)
+                #os.remove(outfile)
+                
+        mkdir(outdir)
+
+        self.print_info(age,metallicity)
+
+        try:
+            self.query_server(outfile,age,metallicity)
+        except Exception as e:
+            logger.debug(str(e))
+            raise RuntimeError('Bad server response')
+
+        if not os.path.exists(outfile):
+            raise RuntimeError('Download failed')
+
+        try:
+            self.verify(outfile,self.survey,age,metallicity)
+        except Exception as e:
+            msg = "Output file is corrupted."
+            logger.error(msg)
+            #os.remove(outfile)
+            raise(e)
+
+        return outfile
+
+class Padova(Download):
+    defaults = copy.deepcopy(defaults_27)
+    isochrone = PadovaIsochrone
+    
+    abins = np.arange(1.0, 13.5 + 0.1, 0.1)
+    zbins = np.arange(1e-4,1e-3 + 1e-5,1e-5)
+
+    def query_server(self,outfile,age,metallicity):
         epsilon = 1e-4
         lage = np.log10(age*1e9)
         lage_min,lage_max = self.defaults['isoc_lage0'],self.defaults['isoc_lage1']
@@ -132,18 +194,6 @@ class Padova(Download):
             msg = 'Metallicity outside of valid range: %g [%g < z < %g]'%(metallicity,z_min,z_max)
             raise RuntimeError(msg)
 
-        if outdir is None: outdir = './'
-        basename = self.params2filename(age,metallicity)
-        outfile = os.path.join(outdir,basename)
-            
-        if os.path.exists(outfile) and not force:
-            logger.warning("Found %s; skipping..."%(outfile))
-            return
-        mkdir(outdir)
-
-        feh = PadovaIsochrone.z2feh(metallicity)
-        self.print_info(age=age,z=metallicity,feh=feh)
-
         d = dict(self.defaults)
         d['photsys_file'] = photsys_dict[self.survey]
         d['isoc_age']     = age * 1e9
@@ -151,28 +201,95 @@ class Padova(Download):
 
         server = 'http://stev.oapd.inaf.it'
         url = server + '/cgi-bin/cmd_%s'%d['cmd_version']
-        logger.info("Accessing %s..."%url)
+        logger.debug("Accessing %s..."%url)
 
         q = urlencode(d)
         logger.debug(url+'?'+q)
         c = urlopen(url, q).read()
         aa = re.compile('output\d+')
         fname = aa.findall(c)
-        if len(fname) > 0:
-            out = '{0}/~lgirardi/tmp/{1}.dat'.format(server, fname[0])
-            cmd = 'wget %s -O %s'%(out,outfile)
-            logger.debug(cmd)
-            stdout = subprocess.check_output(cmd,shell=True,stderr=subprocess.STDOUT)
-            logger.debug(stdout)
-        else:
-            raise RuntimeError('Bad server response')
+        
+        if len(fname) == 0:
+            msg = "Output filename not found"
+            raise RuntimeError(msg)
 
-class OldPadova(Padova):
-    defaults = dict(defaults_27)
-    defaults['isoc_kind'] = 'gi10a'
+        out = '{0}/~lgirardi/tmp/{1}.dat'.format(server, fname[0])
+        cmd = 'wget %s -O %s'%(out,outfile)
+        logger.debug(cmd)
+        stdout = subprocess.check_output(cmd,shell=True,stderr=subprocess.STDOUT)
+        logger.debug(stdout)
 
-    params2filename = OldPadovaIsochrone.params2filename
-    filename2params = OldPadovaIsochrone.filename2params
+        return outfile
+
+    def verify(cls, filename, survey, age, metallicity):
+        age = age*1e9
+        nlines=14
+        with open(filename,'r') as f:
+            lines = [f.readline() for i in range(nlines)]
+            if len(lines) < nlines:
+                msg = "Incorrect file size"
+                raise Exception(msg)
+                
+            try:
+                s = lines[2].split()[-2]
+                assert dict_output[survey][:4] in s
+            except:
+                msg = "Incorrect survey:\n"+lines[2]
+                raise Exception(msg)
+
+            try:
+                z = lines[5].split()[2]
+                assert np.allclose(metallicity,float(z),atol=1e-3)
+            except:
+                msg = "Metallicity does not match:\n"+lines[5]
+                raise Exception(msg)
+
+            try:
+                a = lines[13].split()[1]
+                assert np.allclose(age,float(a),atol=1e-5)
+            except:
+                msg = "Age does not match:\n"+lines[13]
+                raise Exception(msg)
+
+
+    @classmethod
+    def verify(cls, filename, survey, age, metallicity):
+        age = age*1e9
+        nlines=15
+        with open(filename,'r') as f:
+            lines = [f.readline() for i in range(nlines)]
+            if len(lines) < nlines:
+                msg = "Incorrect file size"
+                raise Exception(msg)
+
+            for i,l in enumerate(lines):
+                if l.startswith('# Photometric system:'): break
+            else:
+                msg = "Incorrect file header"
+                raise Exception(msg)
+
+            try:
+                s = lines[i].split()[3]
+                assert photname_dict[survey] == s
+            except:
+                msg = "Incorrect survey:\n"+lines[i]
+                raise Exception(msg)
+
+            try:
+                z = lines[-1].split()[0]
+                assert np.allclose(metallicity,float(z),atol=1e-5)
+            except:
+                msg = "Metallicity does not match:\n"+lines[-1]
+                raise Exception(msg)
+
+            try:
+                a = lines[-1].split()[1]
+                # Need to deal with age or log-age
+                assert (np.allclose(age,float(a),atol=1e-2) or
+                        np.allclose(np.log10(age),float(a),atol=1e-2))
+            except:
+                msg = "Age does not match:\n"+lines[-1]
+                raise Exception(msg)
 
 class Girardi2002(Padova):
     defaults = dict(defaults_27)
@@ -216,6 +333,12 @@ if __name__ == "__main__":
     parser.add_argument('-n','--njobs',default=10,type=int)
     args = parser.parse_args()
 
+    if args.verbose:
+        try:                                                                                            
+            from http.client import HTTPConnection
+        except ImportError:                                                                     from httplib import HTTPConnection
+        HTTPConnection.debuglevel = 1
+
     if args.outdir is None: 
         args.outdir = os.path.join(args.survey.lower(),args.kind.lower())
     logger.info("Writing to output directory: %s"%args.outdir)
@@ -229,17 +352,17 @@ if __name__ == "__main__":
     logger.info("Ages:\n  %s"%np.unique(grid[0]))
     logger.info("Metallicities:\n  %s"%np.unique(grid[1]))
 
-
     def run(args):
         try:  
             p.download(*args)
         except Exception as e: 
             logger.warn(str(e))
+            logger.error("Download failed.")
 
     arguments = [(a,z,args.outdir,args.force) for a,z in zip(*grid)]
-    if args.njobs > 0:
+    if args.njobs > 1:
         pool = Pool(processes=args.njobs, maxtasksperchild=100)
         results = pool.map(run,arguments)
     else:
-        results = map(run,arguments)
+        results = list(map(run,arguments))
     

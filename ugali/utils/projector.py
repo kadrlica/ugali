@@ -8,6 +8,8 @@ http://adsabs.harvard.edu/abs/2002A%26A...395.1077C
 import numpy
 import numpy as np
 
+from ugali.utils.logger import logger
+
 ############################################################
 
 class SphericalRotator:
@@ -105,7 +107,7 @@ class Projector:
             self.sphere_to_image_func = cartesianSphereToImage
             self.image_to_sphere_func = cartesianImageToSphere
         else:
-            print 'WARNING: %s not recognized'%(proj_type)
+            logger.warn('%s not recognized'%(proj_type))
 
     def sphereToImage(self, lon, lat):
         lon_rotated, lat_rotated = self.rotator.rotate(lon, lat)
@@ -372,7 +374,7 @@ def dec2hms(dec):
     MINUTE = 60.
     SECOND = 3600.
     
-    if isinstance(dec,basestring):
+    if isinstance(dec,str):
         dec = float(dec)
 
     fhour = dec*(HOUR/DEGREE)
@@ -393,7 +395,7 @@ def dec2dms(dec):
     MINUTE = 60.
     SECOND = 3600.
     
-    if isinstance(dec,basestring):
+    if isinstance(dec,str):
         dec = float(dec)
 
     sign = numpy.copysign(1.0,dec)
@@ -421,7 +423,7 @@ def hms2dec(hms):
     MINUTE = 60.
     SECOND = 3600.
 
-    if isinstance(hms,basestring):
+    if isinstance(hms,str):
         hour,minute,second = numpy.array(re.split('[hms]',hms))[:3].astype(float)
     else:
         hour,minute,second = hms.T
@@ -443,7 +445,7 @@ def dms2dec(dms):
     # can have its signbit set:
     # http://docs.scipy.org/doc/numpy-1.7.0/reference/c-api.coremath.html#NPY_NZERO
 
-    if isinstance(dms,basestring):
+    if isinstance(dms,str):
         degree,minute,second = numpy.array(re.split('[dms]',hms))[:3].astype(float)
     else:
         degree,minute,second = dms.T

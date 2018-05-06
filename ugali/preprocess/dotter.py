@@ -12,9 +12,13 @@ http://waps.cfa.harvard.edu/MIST/interp_isos.html
 
 import os
 import re
-import urllib2
-from urllib import urlencode
-from urllib2 import urlopen
+try:
+    from urllib.parse import urlencode
+    from urllib.request import urlopen
+except ImportError:
+    from urllib import urlencode
+    from urllib2 import urlopen
+
 import requests
 import sys
 import copy
@@ -32,7 +36,6 @@ import ugali.utils.shell
 from ugali.utils.logger import logger
 from ugali.utils.shell import mkdir
 import ugali.analysis.isochrone as iso
-from ugali.analysis.isochrone import DotterIsochrone
 from ugali.preprocess.padova import Download
 
 """
@@ -63,6 +66,11 @@ can lead to rather large differences between the input and output Z ->
 but we now use the input Z value for internal consistency.
 """
 
+
+###########################################################
+# Dartmouth Isochrones
+# http://stellar.dartmouth.edu/models/isolf_new.php
+
 dict_clr = {'des' : 14,
             'sdss': 11,
             'ps1' : 12,
@@ -79,15 +87,6 @@ dict_afe = {'-0.2'            : 1,
             '+0.6'            : 5,
             '+0.8'            : 6}
 
-# survey system
-dict_output = odict([
-        ('des','DECam'),
-        ('sdss','SDSSugriz'),
-        ('ps1','PanSTARRS'),
-])
-
-# Dartmouth Isochrones
-# http://stellar.dartmouth.edu/models/isolf_new.php
 dartmouth_defaults = {
     'int':'1', # interpolation: cubic=1, linear=2 (ADW: cubic more accurate)
     'out':'1', # outpur: iso=1, iso+LF=2
@@ -104,9 +103,17 @@ dartmouth_defaults = {
     'lns':'', 
     }
 
-
-# MESA Isochrones from
+###########################################################
+# MESA Isochrones
 # http://waps.cfa.harvard.edu/MIST/iso_form.php
+
+# survey system
+dict_output = odict([
+        ('des','DECam'),
+        ('sdss','SDSSugriz'),
+        ('ps1','PanSTARRS'),
+])
+
 mesa_defaults = {
         'version':'1.0',
         'v_div_vcrit':'vvcrit0.4',
@@ -126,31 +133,19 @@ mesa_defaults = {
 
 mesa_defaults_10 = dict(mesa_defaults,version='1.0')
 
-class Dotter(Download):
+class Dotter2008(Download):
+    """ Dartmouth isochrones from Dotter et al. 2008:
+    http://stellar.dartmouth.edu/models/isolf_new.html
+    """
     defaults = copy.deepcopy(dartmouth_defaults)
-
-    params2filename = iso.Dotter2008.params2filename
-    filename2params = iso.Dotter2008.filename2params
+    isochrone=iso.Dotter2008
 
     abins = np.arange(1., 13.5 + 0.1, 0.1)
     zbins = np.arange(7e-5,1e-3 + 1e-5,1e-5)
 
-    def download(self,age,metallicity,outdir=None,force=False):
-
+    def query_server(self, outfile, age, metallicity):
         z = metallicity
-
-        if outdir is None: outdir = './'
-        basename = self.params2filename(age,z)
-        outfile = os.path.join(outdir,basename)
-
-        if os.path.exists(outfile) and not force:
-            logger.warning("Found %s; skipping..."%(outfile))
-            return
-        mkdir(outdir)
-
-        feh = iso.Dotter2008.z2feh(z)
-        self.print_info(age=age,z=z,feh=feh)
-
+        feh = self.isochrone.z2feh(z)    
         params = dict(self.defaults)
         params['age']=age
         params['feh']='%.6f'%feh
@@ -162,13 +157,14 @@ class Dotter(Download):
         response = urlopen(query)
         page_source = response.read()
         try:
-            isochrone_id = int(page_source.split('tmp/tmp')[-1].split('.iso')[0])
+
+            file_id = int(page_source.split('tmp/tmp')[-1].split('.iso')[0])
         except Exception as e:
             logger.debug(str(e))
-            msg = 'Server response is incorrect'
+            msg = 'Output filename not found'
             raise RuntimeError(msg)
 
-        infile = 'http://stellar.dartmouth.edu/models/tmp/tmp%s.iso'%(isochrone_id)
+        infile = 'http://stellar.dartmouth.edu/models/tmp/tmp%s.iso'%(file_id)
         command = 'wget -q %s -O %s'%(infile, outfile)
         subprocess.call(command,shell=True)        
 
@@ -183,24 +179,48 @@ class Dotter(Download):
         #mkdir(outdir)
         #shutil.move(tmpfile,outfile)
 
-class Dotter2008(Dotter):
-    """ Dartmouth isochrones from Dotter et al. 2008:
-    http://stellar.dartmouth.edu/models/isolf_new.html
-    """
+    @classmethod
+    def verify(cls, filename, survey, age, metallicity):
+        nlines=8
+        with open(filename,'r') as f:
+            lines = [f.readline() for i in range(nlines)]
+
+            if len(lines) < nlines:
+                msg = "Incorrect file size"
+                raise Exception(msg)
+
+            try:
+                z = lines[3].split()[4]
+                assert np.allclose(metallicity,float(z),atol=1e-3)
+            except:
+                msg = "Metallicity does not match:\n"+lines[3]
+                raise Exception(msg)
+
+            try:
+                s = lines[5].split()[2]
+                assert dict_output[survey][:4] in s
+            except:
+                msg = "Incorrect survey:\n"+lines[5]
+                raise Exception(msg)
+
+            try:
+                a = lines[7].split('=')[1].strip().split()[0]
+                assert np.allclose(age,float(a),atol=1e-5)
+            except:
+                msg = "Age does not match:\n"+lines[7]
+                raise Exception(msg)
 
 class Dotter2016(Download):
     """ MESA isochrones from Dotter 2016:
     http://waps.cfa.harvard.edu/MIST/iso_form.php
     """
     defaults = copy.deepcopy(mesa_defaults_10)
-
-    params2filename = DotterIsochrone.params2filename
-    filename2params = DotterIsochrone.filename2params
+    isochrone = iso.Dotter2016
 
     abins = np.arange(1., 13.5 + 0.1, 0.1)
     zbins = np.arange(1e-5,1e-3 + 1e-5,1e-5)
 
-    def download(self,age,metallicity,outdir=None,force=False):
+    def query_server(self, outfile, age, metallicity):
         z = metallicity
 
         if outdir is None: outdir = './'
@@ -214,7 +234,7 @@ class Dotter2016(Download):
 
         feh = iso.Dotter2016.z2feh(z)
         self.print_info(age=age,z=z,feh=feh)
-
+        
         params = dict(self.defaults)
         params['output'] = dict_output[self.survey]
         params['FeH_value'] = feh
@@ -231,7 +251,7 @@ class Dotter2016(Download):
             fname = os.path.basename(response.text.split('"')[1])
         except Exception as e:
             logger.debug(str(e))
-            msg = 'Bad server response'
+            msg = 'Output filename not found'
             raise RuntimeError(msg)
             
         tmpdir = os.path.dirname(tempfile.NamedTemporaryFile().name)
@@ -250,9 +270,42 @@ class Dotter2016(Download):
                                          stderr=subprocess.STDOUT)
         logger.debug(stdout)
 
-        logger.info("Creating %s..."%outfile)
+        logger.debug("Creating %s..."%outfile)
         shutil.move(tmpfile.replace('.zip','.cmd'),outfile)
         os.remove(tmpfile)
+
+        return outfile
+
+    @classmethod
+    def verify(cls, filename, survey, age, metallicity):
+        age = age*1e9
+        nlines=14
+        with open(filename,'r') as f:
+            lines = [f.readline() for i in range(nlines)]
+            if len(lines) < nlines:
+                msg = "Incorrect file size"
+                raise Exception(msg)
+                
+            try:
+                s = lines[2].split()[-2]
+                assert dict_output[survey][:4] in s
+            except:
+                msg = "Incorrect survey:\n"+lines[2]
+                raise Exception(msg)
+
+            try:
+                z = lines[5].split()[2]
+                assert np.allclose(metallicity,float(z),atol=1e-3)
+            except:
+                msg = "Metallicity does not match:\n"+lines[5]
+                raise Exception(msg)
+
+            try:
+                a = lines[13].split()[1]
+                assert np.allclose(age,float(a),atol=1e-5)
+            except:
+                msg = "Age does not match:\n"+lines[13]
+                raise Exception(msg)
 
 def factory(name, **kwargs):
     from ugali.utils.factory import factory
@@ -273,7 +326,10 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.verbose:
-        from httplib import HTTPConnection
+        try:
+            from http.client import HTTPConnection
+        except ImportError:
+            from httplib import HTTPConnection
         HTTPConnection.debuglevel = 1
 
     if args.outdir is None: 
@@ -303,4 +359,4 @@ if __name__ == "__main__":
     #    pool = Pool(processes=args.njobs, maxtasksperchild=100)
     #    results = pool.map(run,arguments)
     else:
-        results = map(run,arguments)
+        results = list(map(run,arguments))

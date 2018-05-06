@@ -6,15 +6,14 @@ installed with the '--isochrones' option.
 import os
 import numpy as np
 
-import ugali.analysis.isochrone as isochrone
-
+from ugali import isochrone
 
 # Default parameters
 default_kwargs = dict(age=12,metallicity=0.0002, distance_modulus=18)
 # Alternate parameters
-alt_kwargs = dict(age=13, metallicity=0.0008, distance_modulus=16)
+alt_kwargs = dict(age=10, metallicity=0.0001, distance_modulus=16)
 # Parameter abbreviations
-abbr_kwargs = dict(a=12.5, z=0.0004, mod=17)
+abbr_kwargs = dict(a=10, z=0.0001, mod=17)
 
 padova = ['Padova','Bressan2012','Marigo2017']
 dotter = ['Dotter','Dotter2008','Dotter2016']
@@ -45,7 +44,6 @@ def test_exists():
     isodir = isochrone.get_iso_dir()
     assert os.path.exists(isodir)
     assert len(os.listdir(isodir))
-
 
 def test_abbr(name='Padova'):
     """ Test that parameters can be set by abbreviation. """
@@ -88,6 +86,40 @@ def test_surveys():
         for name in ['Dotter2016']:
             iso = isochrone.factory(name,survey=s)
             
+def test_import():
+    """ Test various import strategies """
+    import ugali.analysis.isochrone
+    from ugali.analysis.isochrone import Bressan2012, CompositeIsochrone
+
+    import ugali.isochrone
+    from ugali.isochrone import Bressan2012, CompositeIsochrone
+
+def test_pdf():
+    """ 
+    Test the isochrone.pdf function.  
+
+    This test should use ~300 MiB of memory...
+    """
+    iso = isochrone.Bressan2012(**default_kwargs)
+    mag_1,mag_2 = np.meshgrid(np.linspace(18,22,100),np.linspace(18,22,100))
+    mag_1 = mag_1.flatten()
+    mag_2 = mag_2.flatten()
+    mag_err_1 = 0.1 * np.ones_like(mag_1)
+    mag_err_2 = 0.1 * np.ones_like(mag_2)
+    u_color = iso.pdf(mag_1, mag_2, mag_err_1, mag_err_2)
+    test_results = np.array([0.00103531, 0.00210507, 0.00393214, 0.00675272, 
+                             0.01066913, 0.01552025, 0.0208020, 0.02570625, 
+                             0.02930542, 0.03083482], dtype=np.float32)
+    np.testing.assert_array_almost_equal(u_color[9490:9500],test_results)
+
+def test_simulate():
+    """ 
+    Test that the isochrone can simulate.
+    """    
+    iso = isochrone.Bressan2012(**default_kwargs)
+    stellar_mass = 5.0e3
+    iso.simulate(stellar_mass)
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description=__doc__)

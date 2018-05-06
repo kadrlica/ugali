@@ -19,6 +19,14 @@ def centers(array):
 def take2D(histogram, x, y, bins_x, bins_y):
     """
     Take the value from a two-dimensional histogram from the bin corresponding to (x, y).
+
+    Parameters:
+    -----------
+    histogram : The values in the histogram (n,m) (ADW: is this ordering right?)
+    x : the x-value to take from the hist
+    y : the y-value to take from the hist
+    bins_x : the xbin edges, including upper edge (n-dim)
+    bins_y : the ybin edges, including upper edge (m-dim)
     """
     histogram = numpy.array(histogram)
     
@@ -215,7 +223,7 @@ def fast_kde(x, y, gridsize=(200,200), extents=None, nocorrelation=False, weight
         xmin, xmax = x.min(), x.max()
         ymin, ymax = y.min(), y.max()
     else:
-        xmin, xmax, ymin, ymax = map(float, extents)
+        xmin, xmax, ymin, ymax = list(map(float, extents))
     dx = (xmax - xmin) / (nx - 1)
     dy = (ymax - ymin) / (ny - 1)
 

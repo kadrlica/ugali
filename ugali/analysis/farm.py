@@ -1,22 +1,17 @@
 #!/usr/bin/env python
-
 """
-Class to farm out analysis tasks.
-
-@author: Keith Bechtol      <bechtol@kicp.uchicago.edu>
-@author: Alex Drlica-Wagner <kadrlica@fnal.gov>
+Dispatch the likelihood scan to a cluster.
 """
 
-import os
+import os,sys
 from os.path import join, exists
-import sys
+import shutil
 import subprocess
 import time
 import glob
 
-import numpy
 import numpy as np
-import healpy
+import healpy as hp
 
 import ugali.utils.config
 import ugali.utils.skymap
@@ -24,16 +19,18 @@ import ugali.utils.batch
 
 from ugali.utils.projector import gal2cel,cel2gal
 from ugali.utils.healpix import subpixel,superpixel,query_disc
-from ugali.utils.healpix import pix2ang,ang2vec
+from ugali.utils.healpix import pix2ang,ang2vec,read_partial_map
 from ugali.utils.logger import logger
 from ugali.utils.shell import mkdir
 
 class Farm:
+    """ Class for organizing and submitting likelihood scan jobs. """
 
-    def __init__(self, configfile):
+    def __init__(self, configfile, verbose=False):
         self.configfile = configfile
         self.config = ugali.utils.config.Config(configfile)
         self._setup()
+        self.verbose = verbose
 
     def _setup(self):
         self.nside_catalog    = self.config['coords']['nside_catalog']
@@ -53,8 +50,9 @@ class Farm:
         """
         params = dict(script=self.config['scan']['script'],
                       config=configfile, outfile=outfile, 
-                      nside=self.nside_likelihood, pix=pix)
-        cmd = '%(script)s %(config)s %(outfile)s --hpx %(nside)i %(pix)i'%params
+                      nside=self.nside_likelihood, pix=pix,
+                      verbose='-v' if self.verbose else '')
+        cmd = '%(script)s %(config)s %(outfile)s --hpx %(nside)i %(pix)i %(verbose)s'%params
         return cmd
 
     # ADW: Should probably be in a utility
@@ -69,7 +67,7 @@ class Farm:
             raise Exception('Requested nside=%i is less than catalog_nside'%nside)
         elif nside > self.nside_pixel:
             raise Exception('Requested nside=%i is greater than pixel_nside'%nside)
-        pix = numpy.arange(healpy.nside2npix(nside), dtype=int)
+        pix = np.arange(hp.nside2npix(nside), dtype=int)
         map = self.inFootprint(pix,nside)
         return map 
 
@@ -79,24 +77,27 @@ class Farm:
         Open each valid filename for the set of pixels and determine the set 
         of subpixels with valid data.
         """
-        if numpy.isscalar(pixels): pixels = numpy.array([pixels])
+        if np.isscalar(pixels): pixels = np.array([pixels])
         if nside is None: nside = self.nside_likelihood
 
-        inside = numpy.zeros( len(pixels), dtype='bool')
+        inside = np.zeros( len(pixels), dtype='bool')
         if not self.nside_catalog:
             catalog_pix = [0]
         else:
             catalog_pix = superpixel(pixels,nside,self.nside_catalog)
-            catalog_pix = numpy.intersect1d(catalog_pix,self.catalog_pixels)
+            catalog_pix = np.intersect1d(catalog_pix,self.catalog_pixels)
 
         for filenames in self.filenames[catalog_pix]:
+            # ADW: Need to replace with healpix functions...
             #logger.debug("Loading %s"%filenames['mask_1'])
-            subpix_1,val_1 = ugali.utils.skymap.readSparseHealpixMap(filenames['mask_1'],'MAGLIM',construct_map=False)
+            #subpix_1,val_1 = ugali.utils.skymap.readSparseHealpixMap(filenames['mask_1'],'MAGLIM',construct_map=False)
+            _n,subpix_1,val_1 = read_partial_map(filenames['mask_1'],'MAGLIM',fullsky=False)
             #logger.debug("Loading %s"%filenames['mask_2'])
-            subpix_2,val_2 = ugali.utils.skymap.readSparseHealpixMap(filenames['mask_2'],'MAGLIM',construct_map=False)
-            subpix = numpy.intersect1d(subpix_1,subpix_2)
-            superpix = numpy.unique(ugali.utils.skymap.superpixel(subpix,self.nside_pixel,nside))
-            inside |= numpy.in1d(pixels, superpix)
+            #subpix_2,val_2 = ugali.utils.skymap.readSparseHealpixMap(filenames['mask_2'],'MAGLIM',construct_map=False)
+            _n,subpix_2,val_2 = read_partial_map(filenames['mask_2'],'MAGLIM',fullsky=False)
+            subpix = np.intersect1d(subpix_1,subpix_2)
+            superpix = np.unique(superpixel(subpix,self.nside_pixel,nside))
+            inside |= np.in1d(pixels, superpix)
             
         return inside
         
@@ -111,24 +112,29 @@ class Farm:
         debug  : Don't run.
         """
         if coords is None:
-            pixels = numpy.arange(healpy.nside2npix(self.nside_likelihood))
+            pixels = np.arange(hp.nside2npix(self.nside_likelihood))
         else:
-            coords = numpy.asarray(coords)
+            coords = np.asarray(coords)
             if coords.ndim == 1:
-                coords = numpy.array([coords])
+                coords = np.array([coords])
             if coords.shape[1] == 2:
-                glon,glat = coords.T
-                radius    = numpy.zeros(len(glon))
+                lon,lat = coords.T
+                radius  = np.zeros(len(lon))
             elif coords.shape[1] == 3:
-                glon,glat,radius = coords.T
+                lon,lat,radius = coords.T
             else:
                 raise Exception("Unrecognized coords shape:"+str(coords.shape))
-            vec = ang2vec(glon,glat)
-            pixels = numpy.zeros(0, dtype=int)
+
+            #ADW: targets is still in glon,glat
+            if self.config['coords']['coordsys'].lower() == 'cel':
+                lon,lat = gal2cel(lon,lat)
+
+            vec = ang2vec(lon,lat)
+            pixels = np.zeros(0, dtype=int)
             for v,r in zip(vec,radius):
                 pix = query_disc(self.nside_likelihood,v,r,inclusive=True,fact=32)
-                pixels = numpy.hstack([pixels, pix])
-            #pixels = numpy.unique(pixels)
+                pixels = np.hstack([pixels, pix])
+            #pixels = np.unique(pixels)
 
         inside = ugali.utils.skymap.inFootprint(self.config,pixels)
         if inside.sum() != len(pixels):
@@ -139,8 +145,9 @@ class Farm:
 
         # Only write the configfile once
         outdir = mkdir(self.config['output']['likedir'])
-        configfile = '%s/config_queue.py'%(outdir)
-        self.config.write(configfile)
+        # Actually copy config instead of re-writing
+        shutil.copy(self.config.filename,outdir)
+        configfile = join(outdir,os.path.basename(self.config.filename))
 
         pixels = pixels[inside]
         self.submit(pixels,queue=queue,debug=debug,configfile=configfile)
@@ -149,13 +156,14 @@ class Farm:
         """
         Submit the likelihood job for the given pixel(s).
         """
-        queue = self.config['batch']['cluster'] if queue is None else queue
-        local = (queue == 'local')
+        # For backwards compatibility
+        batch = self.config['scan'].get('batch',self.config['batch'])
+        queue = batch['cluster'] if queue is None else queue
 
         # Need to develop some way to take command line arguments...
-        self.batch = ugali.utils.batch.batchFactory(queue,**self.config['batch']['opts'])
+        self.batch = ugali.utils.batch.batchFactory(queue,**batch['opts'])
 
-        if numpy.isscalar(pixels): pixels = numpy.array([pixels])
+        if np.isscalar(pixels): pixels = np.array([pixels])
 
         outdir = mkdir(self.config['output']['likedir'])
         logdir = mkdir(join(outdir,'log'))
@@ -164,32 +172,31 @@ class Farm:
         # Save the current configuation settings; avoid writing 
         # file multiple times if configfile passed as argument.
         if configfile is None:
-            if local:
-                configfile = self.configfile
-            else:
-                configfile = '%s/config_queue.py'%(outdir)
-                self.config.write(configfile)
+            shutil.copy(self.config.filename,outdir)
+            configfile = join(outdir,os.path.basename(self.config.filename))
                 
         lon,lat = pix2ang(self.nside_likelihood,pixels)
         commands = []
-        chunk = self.config['batch']['chunk']
+        chunk = batch['chunk']
         istart = 0
         logger.info('=== Submit Likelihood ===')
         for ii,pix in enumerate(pixels):
-            logger.info('  (%i/%i) pixel=%i nside=%i; (lon, lat) = (%.2f, %.2f)'%(ii+1,len(pixels),pix, self.nside_likelihood,lon[ii],lat[ii]))
+            msg = '  (%i/%i) pixel=%i nside=%i; (lon, lat) = (%.2f, %.2f)'
+            msg = msg%(ii+1,len(pixels),pix, self.nside_likelihood,lon[ii],lat[ii])
+            logger.info(msg)
 
             # Create outfile name
             outfile = self.config.likefile%(pix,self.config['coords']['coordsys'].lower())
             outbase = os.path.basename(outfile)
-            jobname = self.config['batch']['jobname']
+            jobname = batch['jobname']
 
             # Submission command
             sub = not os.path.exists(outfile)
             cmd = self.command(outfile,configfile,pix)
             commands.append([ii,cmd,lon[ii],lat[ii],sub])
             
-            if local or chunk == 0:
-                # Not chunking
+            if chunk == 0:
+                # No chunking
                 command = cmd
                 submit = sub
                 logfile = join(logdir,os.path.splitext(outbase)[0]+'.log')
@@ -215,7 +222,7 @@ class Farm:
             else:
                 while True:
                     njobs = self.batch.njobs()
-                    if njobs < self.config['batch']['max_jobs']:
+                    if njobs < batch['max_jobs']:
                         break
                     else:
                         logger.info('%i jobs already in queue, waiting...'%(njobs))
@@ -248,8 +255,7 @@ class Farm:
 
 if __name__ == "__main__":
     import ugali.utils.parser
-    description = "Script for dispatching the likelihood scan to the queue."
-    parser = ugali.utils.parser.Parser(description=description)
+    parser = ugali.utils.parser.Parser(description=__doc__)
     parser.add_config()
     parser.add_debug()
     parser.add_queue()
@@ -257,5 +263,5 @@ if __name__ == "__main__":
     parser.add_coords(required=True,radius=True,targets=True)
     opts = parser.parse_args()
 
-    farm = Farm(opts.config)
+    farm = Farm(opts.config,verbose=opts.verbose)
     x = farm.submit_all(coords=opts.coords,queue=opts.queue,debug=opts.debug)
